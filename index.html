@@ -15,17 +15,46 @@
     // manifest or apple-touch-icon, so phones add THIS page instead (proper
     // icon + name) and it forwards to the real web app.
     //
-    // ?launch=1 = opened from the home-screen shortcut -> go straight in.
-    // Without it the page stays put and shows how to add the shortcut; it
+    // ?launch=1  opened from the home-screen shortcut or a message link ->
+    //            go straight in (any other params, e.g. page / openRepair,
+    //            are passed on to the web app).
+    // ?ext=1     came from a Telegram message: first hop out of the chat
+    //            app's in-app browser into the phone's real browser (Chrome on
+    //            Android, Safari on iPhone), which then loads this page again
+    //            without ext and goes straight in.
+    // Without launch the page stays put and shows how to add the shortcut; it
     // also rewrites its own URL to ?launch=1 so the shortcut iPhone saves
     // (it saves the current address) will forward when tapped.
     var APP_URL = 'https://script.google.com/macros/s/AKfycbwZ03PWNjUL4Wsb_AF3yDN8EUZxbr79i7iIdGmFTNXLhEDiGmuBWmERdNMsXQ0hTlNh/exec';
     var params = new URLSearchParams(location.search);
     var launching = params.get('launch') === '1';
+    var external = params.get('ext') === '1';
     params.delete('launch');
+    params.delete('ext');
     var rest = params.toString();
     var TARGET = APP_URL + (rest ? '?' + rest : '');
-    if (launching) location.replace(TARGET);
+
+    var ua = navigator.userAgent || '';
+    var isAndroid = /Android/i.test(ua);
+    var iosMatch = /(iPhone|iPad|iPod).*OS (\d+)_/i.exec(ua);
+    var iosVersion = iosMatch ? parseInt(iosMatch[2], 10) : 0;
+
+    // This page again, minus ext, as the real browser should load it.
+    var selfUrl = location.origin + location.pathname + '?launch=1' + (rest ? '&' + rest : '');
+    var BROWSER_URL = '';
+    var BROWSER_NAME = '';
+    if (external && isAndroid) {
+      BROWSER_NAME = 'Chrome';
+      BROWSER_URL = 'intent://' + selfUrl.replace(/^https:\/\//, '') +
+        '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(TARGET) + ';end';
+    } else if (external && iosVersion >= 17) {
+      // x-safari-https:// (iOS 17+) opens the address in Safari itself.
+      BROWSER_NAME = 'Safari';
+      BROWSER_URL = 'x-safari-' + selfUrl;
+    }
+
+    if (BROWSER_URL) location.href = BROWSER_URL;
+    else if (launching || external) location.replace(TARGET);
   </script>
   <style>
     :root { --bg: #14161a; --card: #1f2227; --text: #ffffff; --muted: #9ca3af; --accent: #dc2626; --line: #2d3138; }
@@ -36,21 +65,32 @@
     h1 { font-size: 18px; margin: 16px 0 4px; }
     .sub { font-size: 13px; color: var(--muted); margin: 0 0 18px; }
     .open { display: inline-block; padding: 12px 22px; border-radius: 10px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 700; font-size: 14px; }
+    .open-here { display: inline-block; margin-top: 12px; color: var(--muted); font-size: 13px; }
     .guide { margin-top: 22px; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; font-size: 13px; line-height: 1.6; }
     .guide h2 { font-size: 13.5px; margin: 0 0 4px; }
-    .guide ol { margin: 0 0 10px; padding-left: 20px; color: #e5e7eb; }
-    .guide ol:last-child { margin-bottom: 0; }
-    #launchingNote { display: none; font-size: 13px; color: var(--muted); }
-    body.launching .content { display: none; }
-    body.launching #launchingNote { display: block; }
+    .guide ol { margin: 0; padding-left: 20px; color: #e5e7eb; }
+    .panel { display: none; }
+    body.mode-install #installPanel,
+    body.mode-launching #launchingPanel,
+    body.mode-external #externalPanel { display: block; }
   </style>
 </head>
 <body>
   <main>
     <img class="logo" src="icon-192.png" alt="CHR">
     <h1>ระบบแจ้งซ่อมเครื่องจักรและอุปกรณ์</h1>
-    <p id="launchingNote">กำลังเปิดระบบ...</p>
-    <div class="content">
+
+    <div class="panel" id="launchingPanel">
+      <p class="sub">กำลังเปิดระบบ...</p>
+    </div>
+
+    <div class="panel" id="externalPanel">
+      <p class="sub" id="externalText">กำลังเปิดใน Chrome...</p>
+      <a class="open" id="externalLink" href="#">เปิดใน Chrome</a><br>
+      <a class="open-here" id="hereLink" href="#">หรือเปิดในหน้านี้</a>
+    </div>
+
+    <div class="panel" id="installPanel">
       <p class="sub">CH.RADIATORS CO., LTD.</p>
       <a class="open" id="openLink" href="#">เปิดระบบ</a>
       <div class="guide">
@@ -64,9 +104,19 @@
   </main>
   <script>
     document.getElementById('openLink').href = TARGET;
-    if (launching) {
-      document.body.classList.add('launching');
+    document.getElementById('hereLink').href = TARGET;
+    if (BROWSER_URL) {
+      // The chat app may keep this page open behind the real browser, or
+      // refuse to switch — leave buttons for both cases.
+      document.body.className = 'mode-external';
+      document.getElementById('externalText').textContent = 'กำลังเปิดใน ' + BROWSER_NAME + '...';
+      var ext = document.getElementById('externalLink');
+      ext.href = BROWSER_URL;
+      ext.textContent = 'เปิดใน ' + BROWSER_NAME;
+    } else if (launching || external) {
+      document.body.className = 'mode-launching';
     } else {
+      document.body.className = 'mode-install';
       var saved = new URLSearchParams(location.search);
       saved.set('launch', '1');
       history.replaceState(null, '', '?' + saved.toString());
